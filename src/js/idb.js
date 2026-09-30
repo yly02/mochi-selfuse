@@ -599,7 +599,20 @@
   window.idbReplaceAll = function (entries) {
     const list = (entries || []).filter(e => e && e.k !== undefined && e.k !== null);
     if (!list.length) return window.idbClearAll();
+    // 自用版修复 P0-4：原实现**没有任何超时看门狗**——iOS 上大库导入的事务一旦挂起
+    // （既不 oncomplete 也不 onerror），Promise 永不落定，导入链路永久卡死且界面无任何反馈。
+    // 补一个与体积相称的上限（与 idbSet 同口径：默认 4s，大值最多 60s），到点判挂起、
+    // 丢弃连接缓存让下次 open 重建，并如实返回 false（导入侧据此走逐键兜底与回滚）。
+    let _est = 0;
+    try { for (let i = 0; i < list.length; i++) { const _v = list[i].v; _est += (typeof _v === 'string') ? _v.length : 1024; } } catch (e0) {}
+    const _lim = 4000 + (_est > 262144 ? Math.min(56000, Math.ceil(_est / 262144) * 2000) : 0);
     return open().then(db => new Promise((resolve) => {
+      let done = false;
+      const t = setTimeout(function () {
+        if (done) return; done = true;
+        dbPromise = null;
+        resolve(false);
+      }, _lim);
       try {
         const tx = db.transaction(STORE, 'readwrite');
         const os = tx.objectStore(STORE);
@@ -611,10 +624,10 @@
           bad = true;
           try { tx.abort(); } catch (e2) {}
         }
-        tx.oncomplete = () => resolve(!bad);
-        tx.onerror = () => { if (connLost(tx.error)) dbPromise = null; resolve(false); };
-        tx.onabort = () => { if (connLost(tx.error)) dbPromise = null; resolve(false); };
-      } catch (e) { resolve(false); }
+        tx.oncomplete = () => { if (done) return; done = true; clearTimeout(t); resolve(!bad); };
+        tx.onerror = () => { if (connLost(tx.error)) dbPromise = null; if (done) return; done = true; clearTimeout(t); resolve(false); };
+        tx.onabort = () => { if (connLost(tx.error)) dbPromise = null; if (done) return; done = true; clearTimeout(t); resolve(false); };
+      } catch (e) { if (done) return; done = true; clearTimeout(t); resolve(false); }
     })).catch(() => false);
   };
 
@@ -730,6 +743,9 @@
   //   bigKeyBlind 的批注）。启动回填还没轮到的键一律不碰 ⇒ 不与 #785 的就绪时序抢跑、不重复读；
   //   释放动作本身一字未动（那是 iOS 内存压力下的正解，#1197d/#1271/#1300 三批都指着它）。
   var _memoBlind = {};            // 键 -> true＝在册待问 / 'fly'＝已踢一趟，不叠发
+  // 自用版修复 P0-2：键 -> true＝已写内存但还没拿到「事务提交」回执。切后台释放内存副本时
+  // 要跳过这类键（放掉＝值只在内存里，一放就真丢），改为扣住并补踢一次落盘。
+  var _unackedWrites = {};
   function bigMissRehydrate(key) {
     if (_memoBlind[key] === 'fly') return;
     _memoBlind[key] = 'fly';
@@ -890,6 +906,28 @@
       },
       set(k, v) {
         const key = prefix + ':' + k;
+        // ===== 自用版修复 P0-1：整包写回闸门（下沉到写入口，覆盖全部调用方）=====
+        // 病灶：大键（>200KB）在切后台被 idbMemoReleaseBig 放出内存后，xyStore.get 同步读空，
+        // 而消费方清一色 `JSON.parse(store.get(K) || '[]')` → 改 → `store.set(K, 整本)`，
+        // 就用一页空纸顶掉库里那本书（实报：美化方案 20 条 → 1 条；头像库/字卡库被清空）。
+        // 判据只用当场事实：①这一格现在读不到（bigReadUnconfirmed）；②库里那份是 >200KB 的大键；
+        // ③这次要写的比库里那份小一半以上（＝缩水写回，正常追加只会变大或持平）。三条同时成立
+        // 才拦。拦截时踢一次按需取回，用户等几秒再点一次即成功——不把这道闸变成新的写不进去。
+        try {
+          if (v !== undefined && bigReadUnconfirmed(key)) {
+            // 自用版修正：证人必须在「健康连接没有确认过这一格不存在」时才成立。
+            // bigHydAbsent＝按需取回已经拿到过库的真回执（true/null），此时空库就是权威——
+            // 用户亲手把最后一项删干净、然后再加一条，正是这条合法路径，拦住它就变成「存不进去」。
+            var _known = (typeof _bigIdx[key] === 'number' && !bigHydAbsent[key]) ? _bigIdx[key] : 0;
+            var _incoming = (typeof v === 'string') ? v.length : 0;
+            if (_known > LS_BIG_LIMIT && _incoming < _known * 0.5) {
+              try { bigMissRehydrate(key); } catch (eR) {}
+              try { if (window.__mochiWriteBlocked) window.__mochiWriteBlocked(); } catch (eB) {}
+              try { if (window.toast) window.toast('这份数据还没从存储读全，已拦下这次保存：等几秒再点一次就好'); } catch (eT) {}
+              return false;
+            }
+          }
+        } catch (eG) {}
         // v3.5.111：内存缓存无条件初始化并写入——大键（壁纸/头像池等）只进 IDB + 内存、
         // 不进 localStorage；若缓存未初始化（页面刚加载、IDB 恢复未完成）就上传大图，
         // 会既不在 localStorage 也不在内存缓存，切回桌面时读空导致壁纸被清掉。
@@ -926,15 +964,19 @@
         //   合并端天然不信旧值，LS/内存里更新的那份保住。回放/合并的修复通道一字未动。
         try {
           if (window.idbSet) {
+            // 自用版修复 P0-2：登记「未落盘」，事务提交回执到点才销账。落盘前切后台时不放内存副本。
+            _unackedWrites[key] = true;
             const _p = window.idbSet(key, v);
-            if (_wrjT && _p && _p.then) _p.then(function (ok) { if (ok) wrjMark(key, _wrjT); }, function () {});
+            if (_wrjT && _p && _p.then) _p.then(function (ok) { if (ok) { delete _unackedWrites[key]; wrjMark(key, _wrjT); } }, function () {});
             else if (_wrjT) wrjMark(key, _wrjT);
+            if (_p && _p.then) _p.then(function (ok) { if (ok) delete _unackedWrites[key]; }, function () {});
           }
         } catch (e) {}
       },
       remove(k) {
         const key = prefix + ':' + k;
         if (memoryCache) delete memoryCache[key];
+        try { delete _unackedWrites[key]; } catch (eU) {}
         try { localStorage.removeItem(key); } catch (e) {}
         try { wrjForget(key); } catch (e) {}
         if (_bigIdx[key] !== undefined) { delete _bigIdx[key]; bigIdxSave(); }
@@ -998,7 +1040,14 @@
         var len = (typeof v === 'string') ? v.length : (_bigIdx[k] || -1);
         // FIX 2026-09-27 #1349a：放掉＝登记进「本场景该有却没读到」名册（释放动作与体积口径一字未动，
         //   #1197d 那根针钉的就是这一格）——xyStore.get 撞上这一格不再无声返回 null。
-        if (len > 0 && len >= lim) { delete memoryCache[k]; _memoBlind[k] = true; dropped++; }
+        if (len > 0 && len >= lim) {
+          // 自用版修复 P0-2：这一格的值还没拿到落盘回执（idbSet 未 resolve true）⇒ 此刻它只活在
+          // 内存里（大键的 LS 副本已被 set 主动 removeItem）。若直接放掉且 IDB 事务尚未提交，
+          // 就是真丢（切后台那一下抹掉刚上传的东西）。做法：放前先补踢一次落盘，然后照常按体积放
+          // ——「切后台释放大键内存」这条 iOS 保命契约（#1195e）一字未动。
+          if (_unackedWrites[k]) { try { if (window.idbSet) window.idbSet(k, memoryCache[k]); } catch (eW) {} }
+          delete memoryCache[k]; _memoBlind[k] = true; dropped++;
+        }
       }
       // 刻意**不**清 _bigIdx：它只存「键 → 字节数」的小账（不是那份大 payload），留着才能让
       // 下次切后台、以及设置页内存体检继续按同一口径判断这个键有多大；清掉反而丢判断依据。

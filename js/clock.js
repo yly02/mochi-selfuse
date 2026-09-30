@@ -11,7 +11,8 @@ update();
 setInterval(update, 15000); // 每 15 秒校准一次
 })();
 (function () {
-const OFFICIAL_NOTICE = 'https://ling233330-star.github.io/mochi/notice.json';
+const SELFUSE_NO_FORCE = true;   // true = 不拿官方文案强制改写（自己改过的内容不会被改回去）
+const OFFICIAL_NOTICE = '';      // 自用版置空：不再回连官方源
 const MARK_KEY = '小红书@言序（1842523578）';
 const BARS = [
 { tag: '1', title: '免费 · 署名 · 防倒卖', keys: ['alert', 'alert2'],
@@ -50,9 +51,11 @@ host.insertBefore(box, refNode || host.firstChild);
 }
 box.setAttribute('data-anti-scam', bar.tag);
 if (!marked(box, bar)) { // 缺失或被改 → 重建/改写回官方文案
+if (!(SELFUSE_NO_FORCE && (box.textContent || '').trim())) {
 box.innerHTML = '<div class="splash-alert-t"></div><p></p>';
 box.querySelector('.splash-alert-t').textContent = bar.title;
 box.querySelector('p').textContent = barText(bar);
+}
 }
 return box;
 }
@@ -257,6 +260,7 @@ document.addEventListener('mochi-cardlock-open', setupCardLockCard);
 document.addEventListener('mochi-cardlock-locked', setupCardLockCard);
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
 else run();
+if (!SELFUSE_NO_FORCE && OFFICIAL_NOTICE) {
 fetch(OFFICIAL_NOTICE, { cache: 'no-store' })
 .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
 .then(function (d) {
@@ -280,6 +284,7 @@ dirty = true;
 if (dirty) run(); // 强刷回写
 })
 .catch(function () { /* 保留本地兜底 */ });
+}
 })();
 (function () {
 const splash = document.getElementById('splash');

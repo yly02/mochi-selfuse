@@ -377,11 +377,17 @@
     }).catch(function () { writeBuf = buf.concat(writeBuf); scheduleFlush(); return false; });
   };
   function scheduleFlush() { if (!flushT) flushT = setTimeout(function () { flushT = null; window.mochiMediaFlush(); }, 300); }
+  // 自用版修复 P0-3：旧实现只挂 visibilitychange，没有 pagehide/beforeunload。
+  // iOS 上「上滑退到后台→系统回收」或直接关闭标签页时，visibilityState 未必翻转，
+  // 300ms 防抖窗口里刚 push 进 writeBuf 的原图就随内存一起没了（＝用户报的「上传后重进就丢」）。
+  // 这里补两道离页口：pagehide（iOS 真冻结前最后机会）与 beforeunload，并且丢掉防抖立即冲刷。
   try {
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'hidden') window.mochiMediaFlush();
     });
   } catch (e) {}
+  try { window.addEventListener('pagehide', function () { try { window.mochiMediaFlush(); } catch (e) {} }); } catch (e) {}
+  try { window.addEventListener('beforeunload', function () { try { window.mochiMediaFlush(); } catch (e) {} }); } catch (e) {}
 
   // 池探测队列：同一哈希的多次 tokenize 合并成一次 idbGetMany（跨记录重复表情只查/写一次）
   const lookupQueue = new Map();    // hash -> { data, cbs:[] }

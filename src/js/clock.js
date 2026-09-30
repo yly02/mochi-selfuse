@@ -18,7 +18,13 @@
 // 覆盖本地（二传者自己部署的副本也会向官方域名拉取），防二改者连 JS 里的字一起改。
 // （本机制 f7a8b5c 首建、0965278 清理时被整块移除，现按防倒卖需求恢复并扩展双条。）
 (function () {
-  const OFFICIAL_NOTICE = 'https://ling233330-star.github.io/mochi/notice.json';
+  // ===== 自用版定制：断开官方远程控制 =====
+  // 原作者在此处会向官方域名拉取 notice.json，用它覆盖开屏「防骗/署名」文案，并可下发时效横幅；
+  // 同时下面的 marked() 会把被修改过的声明卡按官方文案强制重建——即作者可远程改动本机开屏内容。
+  // 自用版改为完全本地文案：不联网、不覆盖、不强制回写（署名与「禁止倒卖」字样仍原样保留）。
+  // 想改开屏声明：直接改下面的 texts 或 src/template.html 里的静态卡即可。
+  const SELFUSE_NO_FORCE = true;   // true = 不拿官方文案强制改写（自己改过的内容不会被改回去）
+  const OFFICIAL_NOTICE = '';      // 自用版置空：不再回连官方源
   const MARK_KEY = '小红书@言序（1842523578）';
   // 两条声明：tag 对应静态 DOM 的 data-anti-scam 标记；key 为 notice.json 权威字段；marks 为在位判定特征词
   // #621：防骗 + 署名禁倒卖合并为一张置顶声明卡（用户要求「并成一张」）。
@@ -69,9 +75,12 @@
     }
     box.setAttribute('data-anti-scam', bar.tag);
     if (!marked(box, bar)) { // 缺失或被改 → 重建/改写回官方文案
+      // 自用版：本机已有的内容不再被强制改写（空/缺失时才用本地文案补齐）
+      if (!(SELFUSE_NO_FORCE && (box.textContent || '').trim())) {
       box.innerHTML = '<div class="splash-alert-t"></div><p></p>';
       box.querySelector('.splash-alert-t').textContent = bar.title;
       box.querySelector('p').textContent = barText(bar);
+      }
     }
     return box;
   }
@@ -350,7 +359,10 @@
   document.addEventListener('mochi-cardlock-locked', setupCardLockCard);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
-  // 可选官方远程源：失败（离线/被墙/CORS）不阻塞，保留本地兜底；权威文案有变才强刷
+  // 自用版：不拉官方远程源。原先这里会 fetch(OFFICIAL_NOTICE) 并用返回内容覆盖开屏文案、
+  // 甚至下发横幅公告——等于把开屏内容的控制权交给对方服务器。自用版只用本地兜底文案，
+  // 断网/离线/对方改站都影响不到本机。（保留注释以便日后想恢复时知道原设计在此处。）
+  if (!SELFUSE_NO_FORCE && OFFICIAL_NOTICE) {
   fetch(OFFICIAL_NOTICE, { cache: 'no-store' })
     .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
     .then(function (d) {
@@ -375,6 +387,7 @@
       if (dirty) run(); // 强刷回写
     })
     .catch(function () { /* 保留本地兜底 */ });
+  }
 })();
 
 // ===== 开屏加载动画：页面就绪后淡出并移除 =====

@@ -96,7 +96,7 @@ const MARK = 'xy-home-v2:__wr-j:xy-home-v2:';
 // T0 静态锚点
 {
   ok(/return t; \/\/ FIX 2026-09-25 #1257b/.test(src), 'T0a wrjRecord 只报时间戳（return t 交接针在位）');
-  ok(src.includes('if (_wrjT && _p && _p.then) _p.then(function (ok) { if (ok) wrjMark(key, _wrjT); }, function () {});'), 'T0b xyStore.set 值回执补记针在位');
+  ok(src.includes('if (_wrjT && _p && _p.then) _p.then(function (ok) { if (ok) { delete _unackedWrites[key]; wrjMark(key, _wrjT); } }, function () {});') || src.includes('if (_wrjT && _p && _p.then) _p.then(function (ok) { if (ok) wrjMark(key, _wrjT); }, function () {});'), 'T0b xyStore.set 值回执补记针在位');
   ok(!/wrjPersist\(\);\s*\r?\n\s*wrjMark\(key, t\);/.test(src), 'T0c 旧「wrjRecord 尾部无条件标记」写法已清除');
 }
 

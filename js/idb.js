@@ -406,7 +406,16 @@ setTimeout(() => fin(false), 6000);
 window.idbReplaceAll = function (entries) {
 const list = (entries || []).filter(e => e && e.k !== undefined && e.k !== null);
 if (!list.length) return window.idbClearAll();
+let _est = 0;
+try { for (let i = 0; i < list.length; i++) { const _v = list[i].v; _est += (typeof _v === 'string') ? _v.length : 1024; } } catch (e0) {}
+const _lim = 4000 + (_est > 262144 ? Math.min(56000, Math.ceil(_est / 262144) * 2000) : 0);
 return open().then(db => new Promise((resolve) => {
+let done = false;
+const t = setTimeout(function () {
+if (done) return; done = true;
+dbPromise = null;
+resolve(false);
+}, _lim);
 try {
 const tx = db.transaction(STORE, 'readwrite');
 const os = tx.objectStore(STORE);
@@ -418,10 +427,10 @@ list.forEach(e => { os.put(e.v, e.k); });
 bad = true;
 try { tx.abort(); } catch (e2) {}
 }
-tx.oncomplete = () => resolve(!bad);
-tx.onerror = () => { if (connLost(tx.error)) dbPromise = null; resolve(false); };
-tx.onabort = () => { if (connLost(tx.error)) dbPromise = null; resolve(false); };
-} catch (e) { resolve(false); }
+tx.oncomplete = () => { if (done) return; done = true; clearTimeout(t); resolve(!bad); };
+tx.onerror = () => { if (connLost(tx.error)) dbPromise = null; if (done) return; done = true; clearTimeout(t); resolve(false); };
+tx.onabort = () => { if (connLost(tx.error)) dbPromise = null; if (done) return; done = true; clearTimeout(t); resolve(false); };
+} catch (e) { if (done) return; done = true; clearTimeout(t); resolve(false); }
 })).catch(() => false);
 };
 const LS_BIG_LIMIT = 200 * 1024;
@@ -495,6 +504,7 @@ function lsDirtyDel(k) {
 if (_lsDirtyKeys && _lsDirtyKeys.delete(k)) lsDirtySave();
 }
 var _memoBlind = {};            // 键 -> true＝在册待问 / 'fly'＝已踢一趟，不叠发
+var _unackedWrites = {};
 function bigMissRehydrate(key) {
 if (_memoBlind[key] === 'fly') return;
 _memoBlind[key] = 'fly';
@@ -577,6 +587,18 @@ try { if (cb) cb(); } catch (e3) {}
 },
 set(k, v) {
 const key = prefix + ':' + k;
+try {
+if (v !== undefined && bigReadUnconfirmed(key)) {
+var _known = (typeof _bigIdx[key] === 'number' && !bigHydAbsent[key]) ? _bigIdx[key] : 0;
+var _incoming = (typeof v === 'string') ? v.length : 0;
+if (_known > LS_BIG_LIMIT && _incoming < _known * 0.5) {
+try { bigMissRehydrate(key); } catch (eR) {}
+try { if (window.__mochiWriteBlocked) window.__mochiWriteBlocked(); } catch (eB) {}
+try { if (window.toast) window.toast('这份数据还没从存储读全，已拦下这次保存：等几秒再点一次就好'); } catch (eT) {}
+return false;
+}
+}
+} catch (eG) {}
 if (!memoryCache) memoryCache = {};
 memoryCache[key] = v;
 try { delete _wrjReplayed[key]; } catch (e0) {}
@@ -597,15 +619,18 @@ try { localStorage.removeItem(key); } catch (e) {}
 }
 try {
 if (window.idbSet) {
+_unackedWrites[key] = true;
 const _p = window.idbSet(key, v);
-if (_wrjT && _p && _p.then) _p.then(function (ok) { if (ok) wrjMark(key, _wrjT); }, function () {});
+if (_wrjT && _p && _p.then) _p.then(function (ok) { if (ok) { delete _unackedWrites[key]; wrjMark(key, _wrjT); } }, function () {});
 else if (_wrjT) wrjMark(key, _wrjT);
+if (_p && _p.then) _p.then(function (ok) { if (ok) delete _unackedWrites[key]; }, function () {});
 }
 } catch (e) {}
 },
 remove(k) {
 const key = prefix + ':' + k;
 if (memoryCache) delete memoryCache[key];
+try { delete _unackedWrites[key]; } catch (eU) {}
 try { localStorage.removeItem(key); } catch (e) {}
 try { wrjForget(key); } catch (e) {}
 if (_bigIdx[key] !== undefined) { delete _bigIdx[key]; bigIdxSave(); }
@@ -643,7 +668,10 @@ for (var k in memoryCache) {
 if (!Object.prototype.hasOwnProperty.call(memoryCache, k)) continue;
 var v = memoryCache[k];
 var len = (typeof v === 'string') ? v.length : (_bigIdx[k] || -1);
-if (len > 0 && len >= lim) { delete memoryCache[k]; _memoBlind[k] = true; dropped++; }
+if (len > 0 && len >= lim) {
+if (_unackedWrites[k]) { try { if (window.idbSet) window.idbSet(k, memoryCache[k]); } catch (eW) {} }
+delete memoryCache[k]; _memoBlind[k] = true; dropped++;
+}
 }
 return dropped;
 } catch (e) { return 0; }

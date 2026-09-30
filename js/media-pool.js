@@ -259,6 +259,8 @@ document.addEventListener('visibilitychange', function () {
 if (document.visibilityState === 'hidden') window.mochiMediaFlush();
 });
 } catch (e) {}
+try { window.addEventListener('pagehide', function () { try { window.mochiMediaFlush(); } catch (e) {} }); } catch (e) {}
+try { window.addEventListener('beforeunload', function () { try { window.mochiMediaFlush(); } catch (e) {} }); } catch (e) {}
 const lookupQueue = new Map();    // hash -> { data, cbs:[] }
 let lookupT = null;
 window.mochiMediaTokenize = function (dataUrl, opts) {

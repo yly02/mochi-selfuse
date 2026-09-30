@@ -93,7 +93,14 @@
     return !IS_AUTOMATION;   // 未设置：真机默认开，无头默认关
   }
   function qaSetEn(v) { gSet(K_QA_EN, v ? '1' : '0'); }
-  function qaSkipped() { return gGet(K_QA_SKIP) === '1'; }  // 本机已输暗号 → 永久跳过问答层
+  // 自用版定制：默认跳过开屏问答门（每次加载重答全部题目对自用太吵）。
+  // 判据只有本机存储：未设过或被置为 '1' ⇒ 跳过；显式设为 '0' ⇒ 恢复问答（设置里「恢复本机问答」仍可用）。
+  // 数字密码应用锁（applock-en/pin）与开屏 18+ 确认完全不受影响，照旧生效。
+  function qaSkipped() {
+    const v = gGet(K_QA_SKIP);
+    if (v === '0') return false;   // 手动恢复过 ⇒ 照旧问答
+    return true;                    // 未设 / '1' ⇒ 自用版默认跳过
+  }
   function qaSkipSet(v) { gSet(K_QA_SKIP, v ? '1' : '0'); }
   // #299：问答门通过（答对或输暗号）后，本机未设数字密码锁 → 提醒一次「应用锁」自定义锁屏密码功能（每台设备只提示一次）
   function pinHintThen(next) {

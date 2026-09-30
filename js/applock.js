@@ -77,7 +77,11 @@ if (v === '0') return false;
 return !IS_AUTOMATION;   // 未设置：真机默认开，无头默认关
 }
 function qaSetEn(v) { gSet(K_QA_EN, v ? '1' : '0'); }
-function qaSkipped() { return gGet(K_QA_SKIP) === '1'; }  // 本机已输暗号 → 永久跳过问答层
+function qaSkipped() {
+const v = gGet(K_QA_SKIP);
+if (v === '0') return false;   // 手动恢复过 ⇒ 照旧问答
+return true;                    // 未设 / '1' ⇒ 自用版默认跳过
+}
 function qaSkipSet(v) { gSet(K_QA_SKIP, v ? '1' : '0'); }
 function pinHintThen(next) {
 if (pinHash() || gGet(K_PIN_HINT) === '1') { if (next) next(); return; }
